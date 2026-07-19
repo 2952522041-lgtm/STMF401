@@ -22,7 +22,7 @@ targets:
     cppPreprocessAttrs:
       defineList:
         - USE_HAL_DRIVER
-        - STM32F401xx
+        - STM32F401xC
       incList:
         - User
         - Middlewares/Third_Party/FreeRTOS/Source/include
@@ -33,6 +33,7 @@ targets:
         - Core/Inc
         - Drivers/STM32F4xx_HAL_Driver/Inc/Legacy
         - Drivers/CMSIS/Device/ST/STM32F4xx/Include
+        - Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F
       libList: []
     excludeList: []
     settings:

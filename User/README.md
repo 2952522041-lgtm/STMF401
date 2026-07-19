@@ -17,6 +17,8 @@ TIM9 保持为 HAL 的 1 kHz 系统时基。TIM10 使用 84-1 分频和 10000-1 
 
 USART6 参数沿用 CubeMX 配置：115200、8N1。
 
+USART6 RX 使用 DMA2 Stream1 / Channel 5 的 Receive-to-IDLE 接收方式。DMA 缓冲区为 64 字节，空闲事件或缓冲区接收完成后，将本次数据块交给协议状态机解析并立即重新启动 DMA。
+
 帧格式：`AA 55 TYPE LENGTH PAYLOAD CHECKSUM`。校验字节是 `TYPE`、`LENGTH` 和全部负载字节的异或值，多字节数据均为小端序。
 
 - `TYPE=0x01`：设置四路目标转速。负载依次为 FL、FR、BL、BR 四个 `int16_t`，单位 0.1 RPM，共 8 字节。
@@ -25,4 +27,4 @@ USART6 参数沿用 CubeMX 配置：115200、8N1。
 
 ## 速度环
 
-`app_task.c` 使用 100 Hz 固定周期执行四路独立速度控制。默认采用目标转速前馈加比例修正；`SPEED_PID_KP/KI/KD` 是底盘实测后需要调整的参数。
+`app_task.c` 使用 100 Hz 固定周期执行四路独立速度控制。四路控制器均使用 `Lib/CMSIS-DSP-1.17.0` 中的 `arm_pid_instance_f32`，PID 输出直接作为电机转速控制输出；`SPEED_PID_KP/KI/KD` 是底盘实测后需要调整的参数。

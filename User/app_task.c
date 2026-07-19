@@ -9,6 +9,7 @@
 #include "queue.h"
 #include "semphr.h"
 #include "task.h"
+#include "dsp/controller_functions.h"
 
 #define SPEED_CONTROL_FREQUENCY 100.0f
 #define SPEED_CONTROL_DT_SEC (1.0f / SPEED_CONTROL_FREQUENCY)
@@ -23,13 +24,6 @@
 
 typedef struct
 {
-    float integral;
-    float previous_error;
-    float previous_target;
-} SpeedPID_t;
-
-typedef struct
-{
     float target_rpm[MOTOR_NUM];
     float measured_rpm[MOTOR_NUM];
     int32_t encoder_count[MOTOR_NUM];
@@ -37,7 +31,8 @@ typedef struct
 
 static SemaphoreHandle_t speed_tick_sem = NULL;
 static QueueHandle_t telemetry_queue = NULL;
-static SpeedPID_t speed_pid[MOTOR_NUM] = {0};
+static arm_pid_instance_f32 speed_pid[MOTOR_NUM] = {0};
+static float previous_target_rpm[MOTOR_NUM] = {0.0f};
 
 static void SpeedControlTask(void *pvParameters);
 static void UARTTelemetryTask(void *pvParameters);
@@ -58,37 +53,30 @@ static float App_Limit(float value, float limit)
     return value;
 }
 
-static void SpeedPID_Reset(SpeedPID_t *pid)
+static void SpeedPID_Reset(uint32_t motor)
 {
-    pid->integral = 0.0f;
-    pid->previous_error = 0.0f;
-    pid->previous_target = 0.0f;
+    arm_pid_reset_f32(&speed_pid[motor]);
+    previous_target_rpm[motor] = 0.0f;
 }
 
-static float SpeedPID_Update(SpeedPID_t *pid, float target, float measured)
+static float SpeedPID_Update(uint32_t motor, float target, float measured)
 {
     if (target == 0.0f)
     {
-        SpeedPID_Reset(pid);
+        SpeedPID_Reset(motor);
         return 0.0f;
     }
 
-    if ((pid->previous_target * target) < 0.0f)
+    if ((previous_target_rpm[motor] * target) < 0.0f)
     {
-        SpeedPID_Reset(pid);
+        SpeedPID_Reset(motor);
     }
 
     float error = target - measured;
-    pid->integral += error * SPEED_CONTROL_DT_SEC;
-    pid->integral = App_Limit(pid->integral, tb6612_max_rpm);
+    float output_rpm = arm_pid_f32(&speed_pid[motor], error);
+    previous_target_rpm[motor] = target;
 
-    float derivative = (error - pid->previous_error) / SPEED_CONTROL_DT_SEC;
-    float correction = SPEED_PID_KP * error + SPEED_PID_KI * pid->integral + SPEED_PID_KD * derivative;
-
-    pid->previous_error = error;
-    pid->previous_target = target;
-
-    return App_Limit(target + correction, tb6612_max_rpm);
+    return App_Limit(output_rpm, tb6612_max_rpm);
 }
 
 void User_Init(void)
@@ -116,6 +104,14 @@ void APP_FREERTOS_Init(void)
     if ((speed_tick_sem == NULL) || (telemetry_queue == NULL))
     {
         Error_Handler();
+    }
+
+    for (uint32_t i = 0; i < MOTOR_NUM; i++)
+    {
+        speed_pid[i].Kp = SPEED_PID_KP;
+        speed_pid[i].Ki = SPEED_PID_KI / SPEED_CONTROL_FREQUENCY;
+        speed_pid[i].Kd = SPEED_PID_KD * SPEED_CONTROL_FREQUENCY;
+        arm_pid_init_f32(&speed_pid[i], 1);
     }
 
     if (xTaskCreate(SpeedControlTask,
@@ -184,7 +180,7 @@ static void SpeedControlTask(void *pvParameters)
                 sample.measured_rpm[i] = Encoder_GetRPM((Encoder_ID_t)i);
                 sample.encoder_count[i] = Encoder_GetCount((Encoder_ID_t)i);
 
-                float output_rpm = SpeedPID_Update(&speed_pid[i], sample.target_rpm[i], sample.measured_rpm[i]);
+                float output_rpm = SpeedPID_Update(i, sample.target_rpm[i], sample.measured_rpm[i]);
                 Motor_SetRPM((Motor_ID_t)i, output_rpm);
             }
 

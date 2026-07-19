@@ -2,6 +2,7 @@
 #include "usart.h"
 
 #define UARTMODEL_MAX_PAYLOAD_LENGTH 32u
+#define UARTMODEL_RX_DMA_BUFFER_LENGTH 64u
 #define UARTMODEL_TARGET_PAYLOAD_LENGTH 8u
 #define UARTMODEL_TELEMETRY_PAYLOAD_LENGTH 32u
 #define UARTMODEL_FRAME_OVERHEAD 5u
@@ -17,7 +18,7 @@ typedef enum
     UARTMODEL_RX_CHECKSUM,
 } UARTMODEL_RxState_t;
 
-static uint8_t uart_rx_byte = 0u;
+static uint8_t uart_rx_dma_buffer[UARTMODEL_RX_DMA_BUFFER_LENGTH];
 static UARTMODEL_RxState_t uart_rx_state = UARTMODEL_RX_HEADER_1;
 static uint8_t uart_rx_type = 0u;
 static uint8_t uart_rx_length = 0u;
@@ -27,7 +28,7 @@ static uint8_t uart_rx_payload[UARTMODEL_MAX_PAYLOAD_LENGTH];
 static volatile int16_t uart_target_rpm_x10[UARTMODEL_MOTOR_NUM] = {0};
 static volatile uint8_t uart_target_ready = 0u;
 
-static void UARTMODEL_StartReceive(void);
+static HAL_StatusTypeDef UARTMODEL_StartReceive(void);
 
 static int16_t UARTMODEL_FloatToInt16(float value)
 {
@@ -147,12 +148,16 @@ static void UARTMODEL_ParseByte(uint8_t byte)
     }
 }
 
-static void UARTMODEL_RxCpltCallback(UART_HandleTypeDef *huart)
+static void UARTMODEL_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
 {
     if (huart->Instance == USART6)
     {
-        UARTMODEL_ParseByte(uart_rx_byte);
-        UARTMODEL_StartReceive();
+        for (uint16_t i = 0u; i < size; i++)
+        {
+            UARTMODEL_ParseByte(uart_rx_dma_buffer[i]);
+        }
+
+        (void)UARTMODEL_StartReceive();
     }
 }
 
@@ -161,18 +166,27 @@ static void UARTMODEL_ErrorCallback(UART_HandleTypeDef *huart)
     if (huart->Instance == USART6)
     {
         uart_rx_state = UARTMODEL_RX_HEADER_1;
-        UARTMODEL_StartReceive();
+        (void)UARTMODEL_StartReceive();
     }
 }
 
-static void UARTMODEL_StartReceive(void)
+static HAL_StatusTypeDef UARTMODEL_StartReceive(void)
 {
-    (void)HAL_UART_Receive_IT(&huart6, &uart_rx_byte, 1u);
+    HAL_StatusTypeDef status = HAL_UARTEx_ReceiveToIdle_DMA(&huart6, uart_rx_dma_buffer, UARTMODEL_RX_DMA_BUFFER_LENGTH);
+
+    if (status == HAL_OK)
+    {
+        /* An IDLE or full-buffer event is sufficient; a half-transfer callback
+         * would split and restart a normal-mode DMA reception unnecessarily. */
+        __HAL_DMA_DISABLE_IT(huart6.hdmarx, DMA_IT_HT);
+    }
+
+    return status;
 }
 
 void UARTMODEL_Init(void)
 {
-    if (HAL_UART_RegisterCallback(&huart6, HAL_UART_RX_COMPLETE_CB_ID, UARTMODEL_RxCpltCallback) != HAL_OK)
+    if (HAL_UART_RegisterRxEventCallback(&huart6, UARTMODEL_RxEventCallback) != HAL_OK)
     {
         Error_Handler();
     }
@@ -182,7 +196,10 @@ void UARTMODEL_Init(void)
         Error_Handler();
     }
 
-    UARTMODEL_StartReceive();
+    if (UARTMODEL_StartReceive() != HAL_OK)
+    {
+        Error_Handler();
+    }
 }
 
 uint8_t UARTMODEL_GetTargetRPM(float target_rpm[UARTMODEL_MOTOR_NUM])

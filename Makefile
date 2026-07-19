@@ -38,6 +38,7 @@ BUILD_DIR = build
 C_SOURCES =  \
 Core/Src/main.c \
 Core/Src/gpio.c \
+Core/Src/dma.c \
 Core/Src/freertos.c \
 Core/Src/tim.c \
 Core/Src/usart.c \
@@ -50,6 +51,8 @@ User/Motor.c \
 User/encode.c \
 User/UARTMODEL.c \
 User/app_task.c \
+Lib/CMSIS-DSP-1.17.0/Source/arm_pid_init_f32.c \
+Lib/CMSIS-DSP-1.17.0/Source/arm_pid_reset_f32.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_tim_ex.c \
 Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rcc.c \
@@ -149,6 +152,7 @@ AS_INCLUDES =  \
 C_INCLUDES =  \
 -ICore/Inc \
 -IUser \
+-ILib/CMSIS-DSP-1.17.0/Include \
 -IDrivers/STM32F4xx_HAL_Driver/Inc \
 -IDrivers/STM32F4xx_HAL_Driver/Inc/Legacy \
 -IMiddlewares/Third_Party/FreeRTOS/Source/include \
