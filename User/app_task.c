@@ -1,8 +1,8 @@
 #include "app_task.h"
-#include "Motor.h"
-#include "UARTMODEL.h"
 #include "encode.h"
+#include "Motor.h"
 #include "tb6612.h"
+#include "UARTMODEL.h"
 #include "tim.h"
 
 #include "FreeRTOS.h"
@@ -11,72 +11,227 @@
 #include "task.h"
 #include "dsp/controller_functions.h"
 
-#define SPEED_CONTROL_FREQUENCY 100.0f
-#define SPEED_CONTROL_DT_SEC (1.0f / SPEED_CONTROL_FREQUENCY)
-#define SPEED_PID_KP 0.5f
-#define SPEED_PID_KI 0.0f
-#define SPEED_PID_KD 0.0f
-#define SPEED_CONTROL_TASK_STACK_SIZE 384u
-#define SPEED_CONTROL_TASK_PRIORITY (tskIDLE_PRIORITY + 3u)
-#define UART_TELEMETRY_TASK_STACK_SIZE 256u
-#define UART_TELEMETRY_TASK_PRIORITY (tskIDLE_PRIORITY + 1u)
-#define TELEMETRY_QUEUE_LENGTH 1u
+float SPEED_PID_KP = 0.5f;
+float SPEED_PID_KI = 0.0f;
+float SPEED_PID_KD = 0.0f;
+
+#define SPEED_PID_OUTPUT_LIMIT ((float)tb6612_max_rpm)
+#define SPEED_SAMPLE_TASK_STACK_SIZE 256u
+#define SPEED_SAMPLE_TASK_PRIORITY (tskIDLE_PRIORITY + 3u)
+#define SPEED_PID_TASK_STACK_SIZE 384u
+#define SPEED_PID_TASK_PRIORITY (tskIDLE_PRIORITY + 2u)
+#define RECEIVE_TARGET_RPM_TASK_STACK_SIZE 256u
+#define RECEIVE_TARGET_RPM_TASK_PRIORITY (tskIDLE_PRIORITY + 1u)
+#define SPEED_SAMPLE_QUEUE_LENGTH 1u
+#define SPEED_CONTROL_FREQUENCE 100.0f
 
 typedef struct
 {
     float target_rpm[MOTOR_NUM];
     float measured_rpm[MOTOR_NUM];
     int32_t encoder_count[MOTOR_NUM];
-} SpeedSample_t;
+} speed_sample_t;
 
-static SemaphoreHandle_t speed_tick_sem = NULL;
-static QueueHandle_t telemetry_queue = NULL;
-static arm_pid_instance_f32 speed_pid[MOTOR_NUM] = {0};
-static float previous_target_rpm[MOTOR_NUM] = {0.0f};
-
-static void SpeedControlTask(void *pvParameters);
-static void UARTTelemetryTask(void *pvParameters);
+static void speed_sample_task(void *pvParameters);
+static void speed_pid_task(void *pvParameters);
+static void receive_target_rpm_task(void *pvParameters);
 static void APP_TIM10PeriodElapsedCallback(TIM_HandleTypeDef *htim);
 
-static float App_Limit(float value, float limit)
-{
-    if (value > limit)
-    {
-        return limit;
-    }
+static SemaphoreHandle_t speed_tick_sem = NULL;
+static QueueHandle_t speed_sample_queue = NULL;
+static arm_pid_instance_f32 speed_pid[MOTOR_NUM];
+static float last_target_rpm[MOTOR_NUM] = {0.0f};
 
-    if (value < -limit)
+static float SpeedPID_Limit(float value)
+{
+    if (value > SPEED_PID_OUTPUT_LIMIT)
     {
-        return -limit;
+        value = SPEED_PID_OUTPUT_LIMIT;
+    }
+    else if (value < -SPEED_PID_OUTPUT_LIMIT)
+    {
+        value = -SPEED_PID_OUTPUT_LIMIT;
     }
 
     return value;
 }
 
-static void SpeedPID_Reset(uint32_t motor)
+void APP_FREERTOS_Init(void)
 {
-    arm_pid_reset_f32(&speed_pid[motor]);
-    previous_target_rpm[motor] = 0.0f;
+    speed_tick_sem = xSemaphoreCreateBinary();
+    speed_sample_queue = xQueueCreate(SPEED_SAMPLE_QUEUE_LENGTH, sizeof(speed_sample_t));
+
+    if ((speed_tick_sem == NULL) || (speed_sample_queue == NULL))
+    {
+        Error_Handler();
+    }
+
+    for (uint32_t i = 0; i < MOTOR_NUM; i++)
+    {
+        speed_pid[i].Kp = SPEED_PID_KP;
+        speed_pid[i].Ki = SPEED_PID_KI / SPEED_CONTROL_FREQUENCE;
+        speed_pid[i].Kd = SPEED_PID_KD * SPEED_CONTROL_FREQUENCE;
+        arm_pid_init_f32(&speed_pid[i], 1);
+    }
+
+    if (xTaskCreate(speed_sample_task,
+                    "SpeedSampleTask",
+                    SPEED_SAMPLE_TASK_STACK_SIZE,
+                    NULL,
+                    SPEED_SAMPLE_TASK_PRIORITY,
+                    NULL) != pdPASS)
+    {
+        Error_Handler();
+    }
+
+    if (xTaskCreate(speed_pid_task,
+                    "SpeedPIDTask",
+                    SPEED_PID_TASK_STACK_SIZE,
+                    NULL,
+                    SPEED_PID_TASK_PRIORITY,
+                    NULL) != pdPASS)
+    {
+        Error_Handler();
+    }
+
+    if (xTaskCreate(receive_target_rpm_task,
+                    "ReceiveTargetRPMTask",
+                    RECEIVE_TARGET_RPM_TASK_STACK_SIZE,
+                    NULL,
+                    RECEIVE_TARGET_RPM_TASK_PRIORITY,
+                    NULL) != pdPASS)
+    {
+        Error_Handler();
+    }
 }
 
-static float SpeedPID_Update(uint32_t motor, float target, float measured)
+void App_Timer100HZISR(void)
 {
-    if (target == 0.0f)
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    if ((speed_tick_sem != NULL) && (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING))
     {
-        SpeedPID_Reset(motor);
-        return 0.0f;
+        xSemaphoreGiveFromISR(speed_tick_sem, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     }
+}
 
-    if ((previous_target_rpm[motor] * target) < 0.0f)
+static void APP_TIM10PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM10)
     {
-        SpeedPID_Reset(motor);
+        App_Timer100HZISR();
     }
+}
 
-    float error = target - measured;
-    float output_rpm = arm_pid_f32(&speed_pid[motor], error);
-    previous_target_rpm[motor] = target;
+static void speed_sample_task(void *pvParameters)
+{
+    (void)pvParameters;
 
-    return App_Limit(output_rpm, tb6612_max_rpm);
+    TickType_t last_tick = xTaskGetTickCount();
+
+    for (;;)
+    {
+        if (xSemaphoreTake(speed_tick_sem, portMAX_DELAY) == pdTRUE)
+        {
+            speed_sample_t sample;
+            TickType_t now_tick = xTaskGetTickCount();
+            TickType_t elapsed_tick = now_tick - last_tick;
+            float dt_sec;
+
+            if (elapsed_tick == 0u)
+            {
+                dt_sec = 1.0f / SPEED_CONTROL_FREQUENCE;
+            }
+            else
+            {
+                dt_sec = (float)elapsed_tick / configTICK_RATE_HZ;
+            }
+
+            last_tick = now_tick;
+            Encoder_Update(dt_sec);
+
+            for (uint32_t i = 0; i < MOTOR_NUM; i++)
+            {
+                sample.target_rpm[i] = Motor_GetTargetRPM((Motor_ID_t)i);
+                sample.measured_rpm[i] = Encoder_GetRPM((Encoder_ID_t)i);
+                sample.encoder_count[i] = Encoder_GetCount((Encoder_ID_t)i);
+            }
+
+            xQueueOverwrite(speed_sample_queue, &sample);
+        }
+    }
+}
+
+static void speed_pid_task(void *pvParameters)
+{
+    (void)pvParameters;
+
+    for (;;)
+    {
+        speed_sample_t sample;
+
+        if (xQueueReceive(speed_sample_queue, &sample, portMAX_DELAY) == pdTRUE)
+        {
+            float output_rpm[MOTOR_NUM] = {0.0f};
+
+            for (uint32_t i = 0; i < MOTOR_NUM; i++)
+            {
+                float error = sample.target_rpm[i] - sample.measured_rpm[i];
+
+                if (sample.target_rpm[i] == 0.0f)
+                {
+                    arm_pid_reset_f32(&speed_pid[i]);
+                }
+                else
+                {
+                    if ((last_target_rpm[i] * sample.target_rpm[i]) < 0.0f)
+                    {
+                        arm_pid_reset_f32(&speed_pid[i]);
+                    }
+
+                    output_rpm[i] = arm_pid_f32(&speed_pid[i], error);
+                }
+
+                output_rpm[i] = SpeedPID_Limit(output_rpm[i]);
+                last_target_rpm[i] = sample.target_rpm[i];
+            }
+
+            Motor_SetAllRPM(output_rpm[MOTOR_FRONT_LEFT],
+                            output_rpm[MOTOR_FRONT_RIGHT],
+                            output_rpm[MOTOR_BACK_LEFT],
+                            output_rpm[MOTOR_BACK_RIGHT]);
+
+            (void)UARTMODEL_SendTelemetry(sample.target_rpm, sample.measured_rpm, sample.encoder_count);
+        }
+    }
+}
+
+static void receive_target_rpm_task(void *pvParameters)
+{
+    TickType_t last_wake_time;
+
+    (void)pvParameters;
+
+    Motor_SetAllRPM(0.0f, 0.0f, 0.0f, 0.0f);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    last_wake_time = xTaskGetTickCount();
+
+    for (;;)
+    {
+        float target_rpm[MOTOR_NUM];
+
+        if (UARTMODEL_GetTargetRPM(target_rpm) != 0u)
+        {
+            Motor_SetAllTargetRPM(target_rpm[MOTOR_FRONT_LEFT],
+                                  target_rpm[MOTOR_FRONT_RIGHT],
+                                  target_rpm[MOTOR_BACK_LEFT],
+                                  target_rpm[MOTOR_BACK_RIGHT]);
+        }
+
+        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(10));
+    }
 }
 
 void User_Init(void)
@@ -93,112 +248,5 @@ void User_Init(void)
     if (HAL_TIM_Base_Start_IT(&htim10) != HAL_OK)
     {
         Error_Handler();
-    }
-}
-
-void APP_FREERTOS_Init(void)
-{
-    speed_tick_sem = xSemaphoreCreateBinary();
-    telemetry_queue = xQueueCreate(TELEMETRY_QUEUE_LENGTH, sizeof(SpeedSample_t));
-
-    if ((speed_tick_sem == NULL) || (telemetry_queue == NULL))
-    {
-        Error_Handler();
-    }
-
-    for (uint32_t i = 0; i < MOTOR_NUM; i++)
-    {
-        speed_pid[i].Kp = SPEED_PID_KP;
-        speed_pid[i].Ki = SPEED_PID_KI / SPEED_CONTROL_FREQUENCY;
-        speed_pid[i].Kd = SPEED_PID_KD * SPEED_CONTROL_FREQUENCY;
-        arm_pid_init_f32(&speed_pid[i], 1);
-    }
-
-    if (xTaskCreate(SpeedControlTask,
-                    "SpeedControl",
-                    SPEED_CONTROL_TASK_STACK_SIZE,
-                    NULL,
-                    SPEED_CONTROL_TASK_PRIORITY,
-                    NULL) != pdPASS)
-    {
-        Error_Handler();
-    }
-
-    if (xTaskCreate(UARTTelemetryTask,
-                    "UARTTelemetry",
-                    UART_TELEMETRY_TASK_STACK_SIZE,
-                    NULL,
-                    UART_TELEMETRY_TASK_PRIORITY,
-                    NULL) != pdPASS)
-    {
-        Error_Handler();
-    }
-}
-
-void App_Timer100HZISR(void)
-{
-    BaseType_t higher_priority_task_woken = pdFALSE;
-
-    if ((speed_tick_sem != NULL) && (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING))
-    {
-        xSemaphoreGiveFromISR(speed_tick_sem, &higher_priority_task_woken);
-        portYIELD_FROM_ISR(higher_priority_task_woken);
-    }
-}
-
-static void APP_TIM10PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
-    if (htim->Instance == TIM10)
-    {
-        App_Timer100HZISR();
-    }
-}
-
-static void SpeedControlTask(void *pvParameters)
-{
-    (void)pvParameters;
-
-    for (;;)
-    {
-        if (xSemaphoreTake(speed_tick_sem, portMAX_DELAY) == pdTRUE)
-        {
-            float uart_target[MOTOR_NUM];
-            if (UARTMODEL_GetTargetRPM(uart_target) != 0u)
-            {
-                Motor_SetAllTargetRPM(uart_target[MOTOR_FRONT_LEFT],
-                                      uart_target[MOTOR_FRONT_RIGHT],
-                                      uart_target[MOTOR_BACK_LEFT],
-                                      uart_target[MOTOR_BACK_RIGHT]);
-            }
-
-            Encoder_Update(SPEED_CONTROL_DT_SEC);
-
-            SpeedSample_t sample;
-            for (uint32_t i = 0; i < MOTOR_NUM; i++)
-            {
-                sample.target_rpm[i] = Motor_GetTargetRPM((Motor_ID_t)i);
-                sample.measured_rpm[i] = Encoder_GetRPM((Encoder_ID_t)i);
-                sample.encoder_count[i] = Encoder_GetCount((Encoder_ID_t)i);
-
-                float output_rpm = SpeedPID_Update(i, sample.target_rpm[i], sample.measured_rpm[i]);
-                Motor_SetRPM((Motor_ID_t)i, output_rpm);
-            }
-
-            (void)xQueueOverwrite(telemetry_queue, &sample);
-        }
-    }
-}
-
-static void UARTTelemetryTask(void *pvParameters)
-{
-    (void)pvParameters;
-
-    for (;;)
-    {
-        SpeedSample_t sample;
-        if (xQueueReceive(telemetry_queue, &sample, portMAX_DELAY) == pdTRUE)
-        {
-            (void)UARTMODEL_SendTelemetry(sample.target_rpm, sample.measured_rpm, sample.encoder_count);
-        }
     }
 }
