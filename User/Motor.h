@@ -17,6 +17,7 @@ void Motor_SetAllRPM(float front_left_rpm, float front_right_rpm, float back_lef
 void Motor_SetTargetRPM(Motor_ID_t motor, float rpm);
 void Motor_SetAllTargetRPM(float front_left_rpm, float front_right_rpm, float back_left_rpm, float back_right_rpm);
 float Motor_GetTargetRPM(Motor_ID_t motor);
+void Motor_GetAllTargetRPM(float target_rpm[MOTOR_NUM]);
 
 void Motor_SetSpeedPercent(Motor_ID_t motor, float percent);
 void Motor_SetAllSpeedPercent(float front_left_percent, float front_right_percent, float back_left_percent, float back_right_percent);

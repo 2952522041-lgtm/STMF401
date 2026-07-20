@@ -1,7 +1,7 @@
 #include "Motor.h"
 #include "tb6612.h"
 
-static float target_rpms[MOTOR_NUM] = {0.0f};
+static volatile float target_rpms[MOTOR_NUM] = {0.0f};
 
 static const tb6612_Channel_t motor_map[MOTOR_NUM] =
 {
@@ -13,6 +13,11 @@ static const tb6612_Channel_t motor_map[MOTOR_NUM] =
 
 static float Motor_Limit(float value, float limit)
 {
+    if (value != value)
+    {
+        return 0.0f;
+    }
+
     if (value > limit)
     {
         return limit;
@@ -62,10 +67,19 @@ void Motor_SetTargetRPM(Motor_ID_t motor, float rpm)
 
 void Motor_SetAllTargetRPM(float front_left_rpm, float front_right_rpm, float back_left_rpm, float back_right_rpm)
 {
-    Motor_SetTargetRPM(MOTOR_FRONT_LEFT, front_left_rpm);
-    Motor_SetTargetRPM(MOTOR_FRONT_RIGHT, front_right_rpm);
-    Motor_SetTargetRPM(MOTOR_BACK_LEFT, back_left_rpm);
-    Motor_SetTargetRPM(MOTOR_BACK_RIGHT, back_right_rpm);
+    uint32_t primask = __get_PRIMASK();
+
+    __disable_irq();
+
+    target_rpms[MOTOR_FRONT_LEFT] = Motor_Limit(front_left_rpm, tb6612_max_rpm);
+    target_rpms[MOTOR_FRONT_RIGHT] = Motor_Limit(front_right_rpm, tb6612_max_rpm);
+    target_rpms[MOTOR_BACK_LEFT] = Motor_Limit(back_left_rpm, tb6612_max_rpm);
+    target_rpms[MOTOR_BACK_RIGHT] = Motor_Limit(back_right_rpm, tb6612_max_rpm);
+
+    if (primask == 0u)
+    {
+        __enable_irq();
+    }
 }
 
 float Motor_GetTargetRPM(Motor_ID_t motor)
@@ -76,6 +90,27 @@ float Motor_GetTargetRPM(Motor_ID_t motor)
     }
 
     return target_rpms[motor];
+}
+
+void Motor_GetAllTargetRPM(float target_rpm[MOTOR_NUM])
+{
+    if (target_rpm == NULL)
+    {
+        return;
+    }
+
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+
+    for (uint32_t i = 0; i < MOTOR_NUM; i++)
+    {
+        target_rpm[i] = target_rpms[i];
+    }
+
+    if (primask == 0u)
+    {
+        __enable_irq();
+    }
 }
 
 void Motor_SetSpeedPercent(Motor_ID_t motor, float percent)

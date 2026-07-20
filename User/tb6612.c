@@ -19,6 +19,14 @@ static const tb6612_Config_t tb6612s[tb6612_CH_NUM] =
     [tb6612_CH_BACK_RIGHT] = {DIN1_GPIO_Port, DIN1_Pin, DIN2_GPIO_Port, DIN2_Pin, PWM_CH_BACK_RIGHT, TB6612_BACK_RIGHT_DIRECTION},
 };
 
+static tb6612_Direction_t current_direction[tb6612_CH_NUM] =
+{
+    tb6612_DIR_STOP,
+    tb6612_DIR_STOP,
+    tb6612_DIR_STOP,
+    tb6612_DIR_STOP,
+};
+
 static float tb6612_abs(float number)
 {
     return (number < 0.0f) ? -number : number;
@@ -77,8 +85,11 @@ void tb6612_SetDirection(tb6612_Channel_t channel, tb6612_Direction_t direction)
         default:
             HAL_GPIO_WritePin(IN1_GPIO_Port, IN1_Pin, GPIO_PIN_RESET);
             HAL_GPIO_WritePin(IN2_GPIO_Port, IN2_Pin, GPIO_PIN_RESET);
+            direction = tb6612_DIR_STOP;
             break;
     }
+
+    current_direction[channel] = direction;
 }
 
 void tb6612_Stop(tb6612_Channel_t channel)
@@ -100,7 +111,16 @@ void tb6612_SetRPM(tb6612_Channel_t channel, float rpm)
         return;
     }
 
-    float motor_rpm = rpm * tb6612s[channel].direction;
+    float motor_rpm;
+    tb6612_Direction_t new_direction;
+
+    if (rpm != rpm)
+    {
+        tb6612_Stop(channel);
+        return;
+    }
+
+    motor_rpm = rpm * tb6612s[channel].direction;
 
     if (motor_rpm == 0.0f)
     {
@@ -122,11 +142,18 @@ void tb6612_SetRPM(tb6612_Channel_t channel, float rpm)
 
     if (motor_rpm > 0.0f)
     {
-        tb6612_SetDirection(channel, tb6612_DIR_FORWARD);
+        new_direction = tb6612_DIR_FORWARD;
     }
     else
     {
-        tb6612_SetDirection(channel, tb6612_DIR_BACKWARD);
+        new_direction = tb6612_DIR_BACKWARD;
+    }
+
+    if (new_direction != current_direction[channel])
+    {
+        /* Remove PWM before changing H-bridge polarity. */
+        tb6612_SetDuty(channel, 0u);
+        tb6612_SetDirection(channel, new_direction);
     }
 
     tb6612_SetDuty(channel, duty);

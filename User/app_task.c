@@ -1,8 +1,8 @@
 #include "app_task.h"
+#include "analysis.h"
 #include "encode.h"
 #include "Motor.h"
 #include "tb6612.h"
-#include "UARTMODEL.h"
 #include "tim.h"
 
 #include "FreeRTOS.h"
@@ -23,13 +23,12 @@ float SPEED_PID_KD = 0.0f;
 #define RECEIVE_TARGET_RPM_TASK_STACK_SIZE 256u
 #define RECEIVE_TARGET_RPM_TASK_PRIORITY (tskIDLE_PRIORITY + 1u)
 #define SPEED_SAMPLE_QUEUE_LENGTH 1u
-#define SPEED_CONTROL_FREQUENCE 100.0f
+#define SPEED_CONTROL_FREQUENCY_HZ 100.0f
 
 typedef struct
 {
     float target_rpm[MOTOR_NUM];
     float measured_rpm[MOTOR_NUM];
-    int32_t encoder_count[MOTOR_NUM];
 } speed_sample_t;
 
 static void speed_sample_task(void *pvParameters);
@@ -69,8 +68,8 @@ void APP_FREERTOS_Init(void)
     for (uint32_t i = 0; i < MOTOR_NUM; i++)
     {
         speed_pid[i].Kp = SPEED_PID_KP;
-        speed_pid[i].Ki = SPEED_PID_KI / SPEED_CONTROL_FREQUENCE;
-        speed_pid[i].Kd = SPEED_PID_KD * SPEED_CONTROL_FREQUENCE;
+        speed_pid[i].Ki = SPEED_PID_KI / SPEED_CONTROL_FREQUENCY_HZ;
+        speed_pid[i].Kd = SPEED_PID_KD * SPEED_CONTROL_FREQUENCY_HZ;
         arm_pid_init_f32(&speed_pid[i], 1);
     }
 
@@ -116,6 +115,18 @@ void App_Timer100HZISR(void)
     }
 }
 
+void vApplicationMallocFailedHook(void)
+{
+    Error_Handler();
+}
+
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+{
+    (void)xTask;
+    (void)pcTaskName;
+    Error_Handler();
+}
+
 static void APP_TIM10PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM10)
@@ -141,7 +152,7 @@ static void speed_sample_task(void *pvParameters)
 
             if (elapsed_tick == 0u)
             {
-                dt_sec = 1.0f / SPEED_CONTROL_FREQUENCE;
+                dt_sec = 1.0f / SPEED_CONTROL_FREQUENCY_HZ;
             }
             else
             {
@@ -150,12 +161,11 @@ static void speed_sample_task(void *pvParameters)
 
             last_tick = now_tick;
             Encoder_Update(dt_sec);
+            Motor_GetAllTargetRPM(sample.target_rpm);
 
             for (uint32_t i = 0; i < MOTOR_NUM; i++)
             {
-                sample.target_rpm[i] = Motor_GetTargetRPM((Motor_ID_t)i);
                 sample.measured_rpm[i] = Encoder_GetRPM((Encoder_ID_t)i);
-                sample.encoder_count[i] = Encoder_GetCount((Encoder_ID_t)i);
             }
 
             xQueueOverwrite(speed_sample_queue, &sample);
@@ -185,15 +195,21 @@ static void speed_pid_task(void *pvParameters)
                 }
                 else
                 {
+                    float correction_rpm;
+
                     if ((last_target_rpm[i] * sample.target_rpm[i]) < 0.0f)
                     {
                         arm_pid_reset_f32(&speed_pid[i]);
                     }
 
-                    output_rpm[i] = arm_pid_f32(&speed_pid[i], error);
+                    correction_rpm = arm_pid_f32(&speed_pid[i], error);
+                    output_rpm[i] = SpeedPID_Limit(sample.target_rpm[i] + correction_rpm);
+
+                    /* Keep the incremental PID state consistent with the
+                     * saturated actuator command to prevent integral windup. */
+                    speed_pid[i].state[2] = output_rpm[i] - sample.target_rpm[i];
                 }
 
-                output_rpm[i] = SpeedPID_Limit(output_rpm[i]);
                 last_target_rpm[i] = sample.target_rpm[i];
             }
 
@@ -201,36 +217,38 @@ static void speed_pid_task(void *pvParameters)
                             output_rpm[MOTOR_FRONT_RIGHT],
                             output_rpm[MOTOR_BACK_LEFT],
                             output_rpm[MOTOR_BACK_RIGHT]);
-
-            (void)UARTMODEL_SendTelemetry(sample.target_rpm, sample.measured_rpm, sample.encoder_count);
         }
     }
 }
 
 static void receive_target_rpm_task(void *pvParameters)
 {
+    Analysis_TargetRPM_t target;
     TickType_t last_wake_time;
 
     (void)pvParameters;
 
-    Motor_SetAllRPM(0.0f, 0.0f, 0.0f, 0.0f);
-    vTaskDelay(pdMS_TO_TICKS(1000));
-
+    Motor_SetAllTargetRPM(0.0f, 0.0f, 0.0f, 0.0f);
     last_wake_time = xTaskGetTickCount();
 
     for (;;)
     {
-        float target_rpm[MOTOR_NUM];
+        Analysis_Update();
 
-        if (UARTMODEL_GetTargetRPM(target_rpm) != 0u)
+        if ((Analysis_GetTargetRPM(&target) != 0u) &&
+            (Analysis_IsTargetTimeout(HAL_GetTick()) == 0u))
         {
-            Motor_SetAllTargetRPM(target_rpm[MOTOR_FRONT_LEFT],
-                                  target_rpm[MOTOR_FRONT_RIGHT],
-                                  target_rpm[MOTOR_BACK_LEFT],
-                                  target_rpm[MOTOR_BACK_RIGHT]);
+            Motor_SetAllTargetRPM(target.front_left_rpm,
+                                  target.front_right_rpm,
+                                  target.back_left_rpm,
+                                  target.back_right_rpm);
+        }
+        else
+        {
+            Motor_SetAllTargetRPM(0.0f, 0.0f, 0.0f, 0.0f);
         }
 
-        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(10));
+        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(10u));
     }
 }
 
@@ -238,7 +256,8 @@ void User_Init(void)
 {
     Motor_Init();
     Encoder_Init();
-    UARTMODEL_Init();
+    Analysis_Init();
+    Analysis_StartUartReceive();
 
     if (HAL_TIM_RegisterCallback(&htim10, HAL_TIM_PERIOD_ELAPSED_CB_ID, APP_TIM10PeriodElapsedCallback) != HAL_OK)
     {

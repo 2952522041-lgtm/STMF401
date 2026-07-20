@@ -203,8 +203,25 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
+
+  /* A fatal software error must not leave the H-bridge at its last command. */
+  if (__HAL_RCC_TIM5_IS_CLK_ENABLED())
+  {
+    TIM5->CCR1 = 0u;
+    TIM5->CCR2 = 0u;
+    TIM5->CCR3 = 0u;
+    TIM5->CCR4 = 0u;
+  }
+
+  if (__HAL_RCC_GPIOB_IS_CLK_ENABLED())
+  {
+    GPIOB->BSRR = ((uint32_t)(AIN1_Pin | AIN2_Pin |
+                              BIN1_Pin | BIN2_Pin |
+                              CIN1_Pin | CIN2_Pin |
+                              DIN1_Pin | DIN2_Pin) << 16u);
+  }
+
   while (1)
   {
   }

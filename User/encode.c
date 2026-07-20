@@ -67,7 +67,14 @@ int32_t Encoder_GetCount(Encoder_ID_t encoder)
         return 0;
     }
 
-    return (int32_t)__HAL_TIM_GET_COUNTER(encoders[encoder].htim);
+    uint32_t count = __HAL_TIM_GET_COUNTER(encoders[encoder].htim);
+
+    if (__HAL_TIM_GET_AUTORELOAD(encoders[encoder].htim) > 0xFFFFu)
+    {
+        return (int32_t)count;
+    }
+
+    return (int32_t)(int16_t)(uint16_t)count;
 }
 
 void Encoder_Update(float dt_sec)

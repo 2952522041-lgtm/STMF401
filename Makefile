@@ -49,7 +49,7 @@ User/PWM.c \
 User/tb6612.c \
 User/Motor.c \
 User/encode.c \
-User/UARTMODEL.c \
+User/analysis.c \
 User/app_task.c \
 Lib/CMSIS-DSP-1.17.0/Source/arm_pid_init_f32.c \
 Lib/CMSIS-DSP-1.17.0/Source/arm_pid_reset_f32.c \
