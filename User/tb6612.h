@@ -7,8 +7,8 @@
 /* Change one of these signs if a wheel rotates in the opposite direction. */
 #define TB6612_FRONT_LEFT_DIRECTION 1.0f
 #define TB6612_FRONT_RIGHT_DIRECTION 1.0f
-#define TB6612_BACK_LEFT_DIRECTION 1.0f
-#define TB6612_BACK_RIGHT_DIRECTION 1.0f
+#define TB6612_BACK_LEFT_DIRECTION -1.0f
+#define TB6612_BACK_RIGHT_DIRECTION -1.0f
 
 typedef enum
 {

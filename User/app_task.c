@@ -83,7 +83,7 @@ void APP_FREERTOS_Init(void)
         Error_Handler();
     }
 
-    if (xTaskCreate(speed_pid_task,
+    /*if (xTaskCreate(speed_pid_task,
                     "SpeedPIDTask",
                     SPEED_PID_TASK_STACK_SIZE,
                     NULL,
@@ -91,9 +91,9 @@ void APP_FREERTOS_Init(void)
                     NULL) != pdPASS)
     {
         Error_Handler();
-    }
+    }*/
 
-    if (xTaskCreate(receive_target_rpm_task,
+    /*if (xTaskCreate(receive_target_rpm_task,
                     "ReceiveTargetRPMTask",
                     RECEIVE_TARGET_RPM_TASK_STACK_SIZE,
                     NULL,
@@ -101,7 +101,7 @@ void APP_FREERTOS_Init(void)
                     NULL) != pdPASS)
     {
         Error_Handler();
-    }
+    }*/
 }
 
 void App_Timer100HZISR(void)
@@ -249,10 +249,22 @@ static void receive_target_rpm_task(void *pvParameters)
 void User_Init(void)
 {
     Motor_Init();
+    //tb6612_Init();
     Encoder_Init();
-    Analysis_Init();
-    Analysis_StartUartReceive();
-
+    //Analysis_Init();
+    //Analysis_StartUartReceive();
+    //Motor_SetAllRPM(100.0f, 0.0f, 100.0f, 100.0f); 
+    /*MOTOR_FRONT_LEFT = 0,
+    MOTOR_FRONT_RIGHT,
+    MOTOR_BACK_LEFT,
+    MOTOR_BACK_RIGHT,
+    MOTOR_NUM,*/
+    Motor_SetRPM(MOTOR_BACK_LEFT,0.0f);
+    Motor_SetRPM(MOTOR_BACK_RIGHT,0.0f);
+    Motor_SetRPM(MOTOR_FRONT_LEFT,0.0f);
+    Motor_SetRPM(MOTOR_FRONT_RIGHT,100.0f);
+    //tb6612_SetDirection(tb6612_CH_BACK_LEFT, tb6612_DIR_FORWARD);
+    //tb6612_SetDuty(tb6612_CH_FRONT_RIGHT, 2000u);
     if (HAL_TIM_RegisterCallback(&htim10, HAL_TIM_PERIOD_ELAPSED_CB_ID, APP_TIM10PeriodElapsedCallback) != HAL_OK)
     {
         Error_Handler();
