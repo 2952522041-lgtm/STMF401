@@ -19,11 +19,10 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os.h"
-#include "dma.h"
 #include "tim.h"
 #include "usart.h"
 #include "gpio.h"
-
+#include "PWM.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_task.h"
@@ -97,7 +96,6 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM4_Init();
   MX_TIM5_Init();
-  MX_DMA_Init();
   MX_USART6_UART_Init();
   MX_TIM10_Init();
   /* USER CODE BEGIN 2 */
@@ -119,7 +117,7 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-
+    Set_PWM_Duty(PWM_CH_FRONT_LEFT, 2000);
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
@@ -192,7 +190,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
-
+if (htim->Instance == TIM10)
+  {
+    App_Timer100HZISR();
+  }
   /* USER CODE END Callback 1 */
 }
 

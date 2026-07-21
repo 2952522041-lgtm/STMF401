@@ -129,7 +129,7 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 
 static void APP_TIM10PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-    if (htim->Instance == TIM10)
+    if (htim == &htim10)
     {
         App_Timer100HZISR();
     }
@@ -195,21 +195,15 @@ static void speed_pid_task(void *pvParameters)
                 }
                 else
                 {
-                    float correction_rpm;
-
                     if ((last_target_rpm[i] * sample.target_rpm[i]) < 0.0f)
                     {
                         arm_pid_reset_f32(&speed_pid[i]);
                     }
 
-                    correction_rpm = arm_pid_f32(&speed_pid[i], error);
-                    output_rpm[i] = SpeedPID_Limit(sample.target_rpm[i] + correction_rpm);
-
-                    /* Keep the incremental PID state consistent with the
-                     * saturated actuator command to prevent integral windup. */
-                    speed_pid[i].state[2] = output_rpm[i] - sample.target_rpm[i];
+                    output_rpm[i] = arm_pid_f32(&speed_pid[i], error);
                 }
 
+                output_rpm[i] = SpeedPID_Limit(output_rpm[i]);
                 last_target_rpm[i] = sample.target_rpm[i];
             }
 
