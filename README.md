@@ -1,0 +1,257 @@
+# STM32F401 四轮底盘闭环控制
+
+> **当前进度：电机驱动模块和 PID 速度闭环模块均已成功调试，可以稳定完成电机方向控制、PWM 调速、编码器测速及目标转速跟踪。**
+
+本项目是基于 **STM32F401CCU6、FreeRTOS 和 TB6612** 开发的四轮全向底盘控制程序。系统通过四路正交编码器采集轮速，使用 CMSIS-DSP PID 实现四轮独立速度闭环，并支持通过串口发送运动控制指令。
+
+## 功能特点
+
+- 四路直流减速电机独立控制
+- 四路 AB 相编码器测速
+- TIM5 输出四路 20 kHz PWM
+- TIM10 提供 100 Hz 速度环控制周期
+- 基于 FreeRTOS 的速度采样与 PID 控制任务
+- 使用 CMSIS-DSP `arm_pid_f32()` 实现 PID
+- 支持前进、后退、左移、右移、左旋和右旋
+- 串口数据包 CRC-8 校验
+- 300 ms 指令超时自动停车
+- 电机换向保护与 PID 状态复位
+- PID 输出限幅和简单抗积分饱和
+
+## 硬件配置
+
+| 项目 | 配置 |
+| --- | --- |
+| MCU | STM32F401CCUx |
+| 封装 | UFQFPN48 |
+| 系统主频 | 84 MHz |
+| 外部晶振 | 25 MHz |
+| 电机驱动 | TB6612 |
+| 电机数量 | 4 |
+| 编码器 | AB 相正交编码器 |
+| 调试接口 | SWD |
+
+## 软件组件
+
+- STM32 HAL
+- FreeRTOS
+- CMSIS-RTOS V2
+- CMSIS-DSP 1.17.0
+- GNU Arm Embedded Toolchain
+- Make
+- STM32CubeMX
+- Embedded IDE
+
+## 引脚映射
+
+### 电机、PWM 和编码器
+
+| 车轮 | TB6612 方向引脚 | PWM 输出 | 编码器定时器 | 编码器引脚 |
+| --- | --- | --- | --- | --- |
+| 左前 FL | AIN1：PB1，AIN2：PB0 | PA0 / TIM5_CH1 | TIM1 | PA8 / PA9 |
+| 右前 FR | DIN1：PB15，DIN2：PB14 | PA3 / TIM5_CH4 | TIM4 | PB6 / PB7 |
+| 左后 BL | CIN1：PB10，CIN2：PB2 | PA1 / TIM5_CH2 | TIM2 | PA5 / PB3 |
+| 右后 BR | BIN1：PB12，BIN2：PB13 | PA2 / TIM5_CH3 | TIM3 | PA6 / PA7 |
+
+### USART6
+
+| 功能 | 引脚 |
+| --- | --- |
+| TX | PA11 |
+| RX | PA12 |
+
+串口参数：
+
+```text
+115200 baud
+8 data bits
+1 stop bit
+No parity
+No flow control
+```
+
+> 电机应使用独立且满足电流要求的电源，电机电源与 MCU 必须共地。如果 TB6612 的 STBY 引脚没有在硬件上固定为高电平，还需要额外拉高。
+
+## 控制流程
+
+```text
+TIM10 产生 100 Hz 中断
+          │
+          ▼
+释放速度采样信号量
+          │
+          ▼
+SpeedSampleTask
+读取编码器并计算实际 RPM
+          │
+          ▼
+覆盖写入速度采样队列
+          │
+          ▼
+SpeedPIDTask
+计算四路 PID 输出
+          │
+          ▼
+更新电机方向与 PWM
+```
+
+项目使用长度为 1 的覆盖队列传递最新速度数据，避免控制任务处理过期的采样值。
+
+## PID 控制
+
+四路电机分别拥有独立的 PID 控制器，当前使用相同的参数：
+
+```c
+float SPEED_PID_KP = 0.7f;
+float SPEED_PID_KI = 0.2f;
+float SPEED_PID_KD = 0.0f;
+```
+
+速度环控制频率：
+
+```text
+100 Hz（10 ms）
+```
+
+PID 输出范围：
+
+```text
+-330 RPM ～ +330 RPM
+```
+
+目标方向发生改变，或者车轮仍以超过 10 RPM 的速度反向转动时，对应 PID 会复位并暂时停止输出，以降低电机直接换向带来的冲击。
+
+PID 的原始输出经过限幅后，会同步更新控制器内部状态，从而减少积分项持续累积造成的积分饱和。
+
+## 编码器参数
+
+默认编码器参数位于 `User/encode.h`：
+
+| 参数 | 默认值 |
+| --- | ---: |
+| 编码器 PPR | 13 |
+| 正交倍频 | 4 |
+| 电机减速比 | 30 |
+| 输出轴每圈总计数 | 1560 |
+
+轮速计算公式：
+
+```text
+输出轴转数 = 编码器计数差 / (PPR × 正交倍频 × 减速比)
+
+RPM = 输出轴转数 × 60 / 采样时间
+```
+
+## 电机与编码器方向标定
+
+电机输出方向系数位于 `User/tb6612.h`：
+
+```c
+TB6612_FRONT_LEFT_DIRECTION
+TB6612_FRONT_RIGHT_DIRECTION
+TB6612_BACK_LEFT_DIRECTION
+TB6612_BACK_RIGHT_DIRECTION
+```
+
+编码器反馈方向系数位于 `User/encode.h`：
+
+```c
+ENCODER_FRONT_LEFT_DIRECTION
+ENCODER_FRONT_RIGHT_DIRECTION
+ENCODER_BACK_LEFT_DIRECTION
+ENCODER_BACK_RIGHT_DIRECTION
+```
+
+首次上电时建议将车轮悬空测试。
+
+当目标转速为正时，编码器反馈转速也必须为正。如果反馈符号相反，应先修改方向系数，再调整 PID 参数。
+
+## 串口控制协议
+
+USART6 使用中断方式逐字节接收固定长度的数据包：
+
+```text
+@ MODE SPEED CRC8 #
+```
+
+每个数据包共 5 字节：
+
+| 字节 | 内容 | 说明 |
+| ---: | --- | --- |
+| 0 | `0x40` | 包头 `@` |
+| 1 | `MODE` | 运动模式，范围 0～6 |
+| 2 | `SPEED` | 速度档位，范围 0～3 |
+| 3 | `CRC8` | 前三个字节的 CRC-8 |
+| 4 | `0x23` | 包尾 `#` |
+
+`MODE`、`SPEED` 和 `CRC8` 均为二进制字节，不是 ASCII 数字。
+
+### 运动模式
+
+| MODE | 动作 | FL | FR | BL | BR |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 0 | 停止 | 0 | 0 | 0 | 0 |
+| 1 | 前进 | + | + | + | + |
+| 2 | 后退 | - | - | - | - |
+| 3 | 左移 | - | + | + | - |
+| 4 | 右移 | + | - | - | + |
+| 5 | 左旋 | - | + | - | + |
+| 6 | 右旋 | + | - | + | - |
+
+### 速度档位
+
+| SPEED | 目标转速 |
+| ---: | ---: |
+| 0 | 0 RPM，仅用于停止模式 |
+| 1 | 100 RPM |
+| 2 | 200 RPM |
+| 3 | 300 RPM |
+
+停止模式下，`SPEED` 必须为 0。
+
+运动模式下，`SPEED` 必须为 1、2 或 3。
+
+### CRC-8 参数
+
+```text
+初始值：0x00
+多项式：0x07
+计算范围：包头、MODE、SPEED
+```
+
+前进 100 RPM 的完整数据包：
+
+```text
+40 01 01 94 23
+```
+
+停止数据包：
+
+```text
+40 00 00 86 23
+```
+
+连续 300 ms 没有收到合法数据包时，串口控制逻辑会将四轮目标转速清零。
+
+## 当前默认运行状态
+
+当前代码处于左前轮单轮调试状态：
+
+- 左前轮目标转速固定为 100 RPM
+- 其余三轮目标转速为 0
+- `Analysis_Init()` 暂时被注释
+- `Analysis_StartUartReceive()` 暂时被注释
+- `ReceiveTargetRPMTask` 的创建代码暂时被注释
+
+因此，直接编译烧录后只会运行左前轮闭环测试，串口指令暂时不会生效。
+
+如需启用串口控制，请在 `User/app_task.c` 中：
+
+1. 恢复 `ReceiveTargetRPMTask` 的创建代码。
+2. 恢复 `Analysis_Init()`。
+3. 恢复 `Analysis_StartUartReceive()`。
+4. 删除或注释下面的单轮测试代码：
+
+```c
+Motor_SetAllTargetRPM(100.0f, 0.0f, 0.0f, 0.0f);
+```
