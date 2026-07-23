@@ -11,8 +11,8 @@
 #include "task.h"
 #include "dsp/controller_functions.h"
 
-float SPEED_PID_KP = 0.5f;
-float SPEED_PID_KI = 0.0f;
+float SPEED_PID_KP = 0.7f;
+float SPEED_PID_KI = 0.2f;
 float SPEED_PID_KD = 0.0f;
 
 #define SPEED_PID_OUTPUT_LIMIT ((float)tb6612_max_rpm)
@@ -24,6 +24,7 @@ float SPEED_PID_KD = 0.0f;
 #define RECEIVE_TARGET_RPM_TASK_PRIORITY (tskIDLE_PRIORITY + 1u)
 #define SPEED_SAMPLE_QUEUE_LENGTH 1u
 #define SPEED_CONTROL_FREQUENCY_HZ 100.0f
+#define SPEED_REVERSAL_THRESHOLD_RPM 10.0f
 
 typedef struct
 {
@@ -40,6 +41,12 @@ static SemaphoreHandle_t speed_tick_sem = NULL;
 static QueueHandle_t speed_sample_queue = NULL;
 static arm_pid_instance_f32 speed_pid[MOTOR_NUM];
 static float last_target_rpm[MOTOR_NUM] = {0.0f};
+static uint8_t reversal_pending[MOTOR_NUM] = {0u};
+
+static float Speed_Abs(float value)
+{
+    return (value < 0.0f) ? -value : value;
+}
 
 static float SpeedPID_Limit(float value)
 {
@@ -83,7 +90,7 @@ void APP_FREERTOS_Init(void)
         Error_Handler();
     }
 
-    /*if (xTaskCreate(speed_pid_task,
+    if (xTaskCreate(speed_pid_task,
                     "SpeedPIDTask",
                     SPEED_PID_TASK_STACK_SIZE,
                     NULL,
@@ -91,7 +98,7 @@ void APP_FREERTOS_Init(void)
                     NULL) != pdPASS)
     {
         Error_Handler();
-    }*/
+    }
 
     /*if (xTaskCreate(receive_target_rpm_task,
                     "ReceiveTargetRPMTask",
@@ -188,22 +195,51 @@ static void speed_pid_task(void *pvParameters)
             for (uint32_t i = 0; i < MOTOR_NUM; i++)
             {
                 float error = sample.target_rpm[i] - sample.measured_rpm[i];
+                uint8_t allow_control = 1u;
 
                 if (sample.target_rpm[i] == 0.0f)
                 {
                     arm_pid_reset_f32(&speed_pid[i]);
+                    reversal_pending[i] = 0u;
                 }
                 else
                 {
                     if ((last_target_rpm[i] * sample.target_rpm[i]) < 0.0f)
                     {
                         arm_pid_reset_f32(&speed_pid[i]);
+                        reversal_pending[i] = 1u;
+                        allow_control = 0u;
                     }
 
-                    output_rpm[i] = arm_pid_f32(&speed_pid[i], error);
+                    /* Also compare against actual wheel motion. This catches a
+                     * stop command followed immediately by a reverse command,
+                     * where last_target_rpm has already become zero. */
+                    if ((allow_control != 0u) &&
+                        ((sample.target_rpm[i] * sample.measured_rpm[i]) < 0.0f) &&
+                        (Speed_Abs(sample.measured_rpm[i]) > SPEED_REVERSAL_THRESHOLD_RPM))
+                    {
+                        arm_pid_reset_f32(&speed_pid[i]);
+                        reversal_pending[i] = 1u;
+                        allow_control = 0u;
+                    }
+                    else if ((allow_control != 0u) && (reversal_pending[i] != 0u))
+                    {
+                        reversal_pending[i] = 0u;
+                    }
+
+                    if (allow_control != 0u)
+                    {
+                        output_rpm[i] = arm_pid_f32(&speed_pid[i], error);
+                    }
                 }
 
                 output_rpm[i] = SpeedPID_Limit(output_rpm[i]);
+
+                /* arm_pid_f32 stores its raw output in state[2]. Keep the
+                 * internal state equal to the limited actuator command so the
+                 * integral term cannot continue winding up past the limit. */
+                speed_pid[i].state[2] = output_rpm[i];
+
                 last_target_rpm[i] = sample.target_rpm[i];
             }
 
@@ -249,22 +285,10 @@ static void receive_target_rpm_task(void *pvParameters)
 void User_Init(void)
 {
     Motor_Init();
-    //tb6612_Init();
     Encoder_Init();
     //Analysis_Init();
     //Analysis_StartUartReceive();
-    //Motor_SetAllRPM(100.0f, 0.0f, 100.0f, 100.0f); 
-    /*MOTOR_FRONT_LEFT = 0,
-    MOTOR_FRONT_RIGHT,
-    MOTOR_BACK_LEFT,
-    MOTOR_BACK_RIGHT,
-    MOTOR_NUM,*/
-    Motor_SetRPM(MOTOR_BACK_LEFT,0.0f);
-    Motor_SetRPM(MOTOR_BACK_RIGHT,0.0f);
-    Motor_SetRPM(MOTOR_FRONT_LEFT,0.0f);
-    Motor_SetRPM(MOTOR_FRONT_RIGHT,100.0f);
-    //tb6612_SetDirection(tb6612_CH_BACK_LEFT, tb6612_DIR_FORWARD);
-    //tb6612_SetDuty(tb6612_CH_FRONT_RIGHT, 2000u);
+    Motor_SetAllTargetRPM(100.0f, 0.0f, 0.0f, 0.0f);
     if (HAL_TIM_RegisterCallback(&htim10, HAL_TIM_PERIOD_ELAPSED_CB_ID, APP_TIM10PeriodElapsedCallback) != HAL_OK)
     {
         Error_Handler();

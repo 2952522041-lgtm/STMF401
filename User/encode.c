@@ -12,9 +12,9 @@ typedef struct
 static Encoder_Config_t encoders[ENCODER_NUM] =
 {
     [ENCODER_FRONT_LEFT] = {&htim1, 0u, 0.0f, ENCODER_FRONT_LEFT_DIRECTION},
-    [ENCODER_FRONT_RIGHT] = {&htim2, 0u, 0.0f, ENCODER_FRONT_RIGHT_DIRECTION},
-    [ENCODER_BACK_LEFT] = {&htim3, 0u, 0.0f, ENCODER_BACK_LEFT_DIRECTION},
-    [ENCODER_BACK_RIGHT] = {&htim4, 0u, 0.0f, ENCODER_BACK_RIGHT_DIRECTION},
+    [ENCODER_FRONT_RIGHT] = {&htim4, 0u, 0.0f, ENCODER_FRONT_RIGHT_DIRECTION},
+    [ENCODER_BACK_LEFT] = {&htim2, 0u, 0.0f, ENCODER_BACK_LEFT_DIRECTION},
+    [ENCODER_BACK_RIGHT] = {&htim3, 0u, 0.0f, ENCODER_BACK_RIGHT_DIRECTION},
 };
 
 static int32_t Encoder_GetDelta(const Encoder_Config_t *encoder, uint32_t now)

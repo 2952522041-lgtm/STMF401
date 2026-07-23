@@ -8,8 +8,8 @@
 
 /* Change one of these signs if its measured RPM polarity is reversed. */
 #define ENCODER_FRONT_LEFT_DIRECTION 1.0f
-#define ENCODER_FRONT_RIGHT_DIRECTION 1.0f
-#define ENCODER_BACK_LEFT_DIRECTION 1.0f
+#define ENCODER_FRONT_RIGHT_DIRECTION -1.0f
+#define ENCODER_BACK_LEFT_DIRECTION -1.0f
 #define ENCODER_BACK_RIGHT_DIRECTION 1.0f
 
 typedef enum
