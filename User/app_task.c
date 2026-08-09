@@ -26,11 +26,11 @@ float SPEED_PID_KD = 0.0f;
 #define SPEED_CONTROL_FREQUENCY_HZ 100.0f
 #define SPEED_REVERSAL_THRESHOLD_RPM 10.0f
 
-/* The team vehicle was validated as a standalone F401 chassis. The custom
- * inter-board UART hardware was not reliable, so the public default starts a
- * four-wheel 100 RPM straight-line run without waiting for F407 commands.
- * Set this to 1 only after the physical USART6 link has been repaired and
- * revalidated. */
+/* The public four-wheel 100 RPM straight-line default has been compiled,
+ * flashed and revalidated on the team vehicle. The custom inter-board UART
+ * hardware was not reliable, so this mode does not wait for F407 commands.
+ * Set UART control to 1 only after the physical USART6 link has been repaired
+ * and revalidated. */
 #define APP_ENABLE_F407_UART_CONTROL 0u
 #define APP_STANDALONE_STRAIGHT_RPM 100.0f
 
