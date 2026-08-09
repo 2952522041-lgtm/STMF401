@@ -26,6 +26,14 @@ float SPEED_PID_KD = 0.0f;
 #define SPEED_CONTROL_FREQUENCY_HZ 100.0f
 #define SPEED_REVERSAL_THRESHOLD_RPM 10.0f
 
+/* The team vehicle was validated as a standalone F401 chassis. The custom
+ * inter-board UART hardware was not reliable, so the public default starts a
+ * four-wheel 100 RPM straight-line run without waiting for F407 commands.
+ * Set this to 1 only after the physical USART6 link has been repaired and
+ * revalidated. */
+#define APP_ENABLE_F407_UART_CONTROL 0u
+#define APP_STANDALONE_STRAIGHT_RPM 100.0f
+
 typedef struct
 {
     float target_rpm[MOTOR_NUM];
@@ -34,7 +42,9 @@ typedef struct
 
 static void speed_sample_task(void *pvParameters);
 static void speed_pid_task(void *pvParameters);
+#if APP_ENABLE_F407_UART_CONTROL
 static void receive_target_rpm_task(void *pvParameters);
+#endif
 static void APP_TIM10PeriodElapsedCallback(TIM_HandleTypeDef *htim);
 
 static SemaphoreHandle_t speed_tick_sem = NULL;
@@ -100,7 +110,8 @@ void APP_FREERTOS_Init(void)
         Error_Handler();
     }
 
-    /*if (xTaskCreate(receive_target_rpm_task,
+#if APP_ENABLE_F407_UART_CONTROL
+    if (xTaskCreate(receive_target_rpm_task,
                     "ReceiveTargetRPMTask",
                     RECEIVE_TARGET_RPM_TASK_STACK_SIZE,
                     NULL,
@@ -108,7 +119,8 @@ void APP_FREERTOS_Init(void)
                     NULL) != pdPASS)
     {
         Error_Handler();
-    }*/
+    }
+#endif
 }
 
 void App_Timer100HZISR(void)
@@ -251,6 +263,7 @@ static void speed_pid_task(void *pvParameters)
     }
 }
 
+#if APP_ENABLE_F407_UART_CONTROL
 static void receive_target_rpm_task(void *pvParameters)
 {
     Analysis_TargetRPM_t target;
@@ -281,14 +294,21 @@ static void receive_target_rpm_task(void *pvParameters)
         vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(10u));
     }
 }
+#endif
 
 void User_Init(void)
 {
     Motor_Init();
     Encoder_Init();
-    //Analysis_Init();
-    //Analysis_StartUartReceive();
-    Motor_SetAllTargetRPM(100.0f, 0.0f, 0.0f, 0.0f);
+#if APP_ENABLE_F407_UART_CONTROL
+    Analysis_Init();
+    Analysis_StartUartReceive();
+#else
+    Motor_SetAllTargetRPM(APP_STANDALONE_STRAIGHT_RPM,
+                          APP_STANDALONE_STRAIGHT_RPM,
+                          APP_STANDALONE_STRAIGHT_RPM,
+                          APP_STANDALONE_STRAIGHT_RPM);
+#endif
     if (HAL_TIM_RegisterCallback(&htim10, HAL_TIM_PERIOD_ELAPSED_CB_ID, APP_TIM10PeriodElapsedCallback) != HAL_OK)
     {
         Error_Handler();
